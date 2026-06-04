@@ -349,7 +349,13 @@ export default function GrowthDashboard({ childName, age, location, activitiesRa
               </div>
 
               {act.bookingNote && (
-                <p className="mt-2 text-xs text-emerald-600 font-medium">✓ {act.bookingNote}</p>
+                <p className={`mt-2 text-xs font-medium ${
+                  act.bookingNote.toLowerCase().includes('error') || act.bookingNote.toLowerCase().includes('unconfirmed')
+                    ? 'text-amber-600'
+                    : 'text-emerald-600'
+                }`}>
+                  {act.bookingNote.toLowerCase().includes('error') || act.bookingNote.toLowerCase().includes('unconfirmed') ? '⚠️' : '✓'} {act.bookingNote}
+                </p>
               )}
             </div>
           )
