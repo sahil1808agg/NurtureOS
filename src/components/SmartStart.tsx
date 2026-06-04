@@ -13,7 +13,7 @@ interface SmartStartProps {
   error?: string | null
 }
 
-const GOOGLE_API_KEY = 'AIzaSyALtdvueCY2VvLtdhv8_POp5DaS8Fn6WN8'
+const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_API_KEY
 
 interface Prediction {
   place_id: string
