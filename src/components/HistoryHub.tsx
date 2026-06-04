@@ -55,20 +55,48 @@ function parseAnalysis(json: unknown): ReportAnalysis | null {
   try {
     const unwrap = (v: unknown): unknown => {
       if (!v) return null
-      if (Array.isArray(v)) return unwrap(v[0])
+
+      // Array → try each item
+      if (Array.isArray(v)) {
+        for (const item of v) { const r = unwrap(item); if (r) return r }
+        return null
+      }
+
+      // String → extract JSON from code fences or parse directly
       if (typeof v === 'string') {
-        const s = v.replace(/^```(?:json)?\s*/m, '').replace(/\s*```\s*$/m, '').trim()
-        try { return unwrap(JSON.parse(s)) } catch { return null }
+        const trimmed = v.trim()
+        if (!trimmed) return null
+        // Try extracting from code fences first (handles prose + ```json {...} ```)
+        const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]+?)\s*```/)
+        if (fenceMatch) {
+          try { return unwrap(JSON.parse(fenceMatch[1])) } catch { /* fall through */ }
+        }
+        try { return unwrap(JSON.parse(trimmed)) } catch { return null }
       }
-      if (typeof v === 'object') {
-        const o = v as Record<string, unknown>
-        if (o.school_report_synthesis) return o.school_report_synthesis
-        if (o.text) return unwrap(o.text)
-        if (o.output) return unwrap(o.output)
-        if (o.holistic_summary) return o
+
+      if (typeof v !== 'object') return null
+      const o = v as Record<string, unknown>
+
+      // Already the synthesis payload
+      if (o.holistic_summary) return o
+
+      // Nested under school_report_synthesis key
+      if (o.school_report_synthesis) return unwrap(o.school_report_synthesis)
+
+      // n8n wraps in output (object or string)
+      if (o.output !== undefined) { const r = unwrap(o.output); if (r) return r }
+
+      // n8n LLM node wraps in text
+      if (o.text !== undefined) { const r = unwrap(o.text); if (r) return r }
+
+      // Other common wrappers
+      for (const key of ['data', 'result', 'content', 'response', 'synthesis']) {
+        if (o[key]) { const r = unwrap(o[key]); if (r) return r }
       }
+
       return null
     }
+
     const payload = unwrap(json) as Record<string, unknown> | null
     if (!payload?.holistic_summary) return null
     return payload as unknown as ReportAnalysis
@@ -97,10 +125,10 @@ export default function HistoryHub({ data, childName, age, location, submitting 
   const [uploadError, setUploadError]   = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const callWebhook = async (file: File) => {
+  const callWebhook = async (file: File, attempt = 1) => {
     setAnalysing(true)
     setAnalyseError(null)
-    setAnalysis(null)
+    if (attempt === 1) setAnalysis(null)
     try {
       const form = new FormData()
       form.append('report', file)
@@ -111,10 +139,23 @@ export default function HistoryHub({ data, childName, age, location, submitting 
       if (!res.ok) throw new Error(`Server returned ${res.status}`)
       const json = await res.json().catch(() => null)
       const parsed = parseAnalysis(json)
-      if (parsed) setAnalysis(parsed)
-      else setAnalyseError('Could not parse report analysis. You can still continue.')
+      if (parsed) {
+        setAnalysis(parsed)
+      } else if (attempt < 3) {
+        // Auto-retry up to 3 times on parse failure
+        setAnalyseError(`Parsing attempt ${attempt} failed — retrying…`)
+        setTimeout(() => callWebhook(file, attempt + 1), 1500)
+        return
+      } else {
+        setAnalyseError('Could not parse report analysis after 3 attempts. You can still continue.')
+      }
     } catch (err) {
-      setAnalyseError('Analysis failed. Please try again or continue without it.')
+      if (attempt < 3) {
+        setAnalyseError(`Attempt ${attempt} failed — retrying…`)
+        setTimeout(() => callWebhook(file, attempt + 1), 1500)
+        return
+      }
+      setAnalyseError('Analysis failed after 3 attempts. You can still continue.')
       console.error(err)
     } finally {
       setAnalysing(false)
